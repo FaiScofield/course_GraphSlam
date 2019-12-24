@@ -26,7 +26,9 @@ if(OpenCV_FOUND)
     message(STATUS "        OpenCV Version: ${OpenCV_VERSION}")
     message(STATUS "        OpenCV Include: ${OpenCV_INCLUDE_DIRS}")
     message(STATUS "        OpenCV Library: ${OpenCV_LIBS}")
-endif(OpenCV_FOUND)
+else()
+    message("        OpenCV Not Found!!!")
+endif()
 
 # glog
 find_package(Glog REQUIRED)
@@ -35,15 +37,35 @@ include_directories(${GLOG_INCLUDE_DIRS})
 # G2O
 # find_package(CSparse REQUIRED)
 # include_directories(${CSPARSE_INCLUDE_DIR})
+if(CSPARSE_FOUND)
+    message("        CSparse Include: ${CSPARSE_INCLUDE_DIR}" )
+    message("        CSparse Library: ${CSPARSE_LIBRARY}" )
+else()
+    message("        CSparse Not Found!!!")
+endif()
+
 find_package(Cholmod REQUIRED)
 include_directories(${CHOLMOD_INCLUDE_DIR})
+if(CHOLMOD_FOUND)
+    message("        Cholmod Include: ${CHOLMOD_INCLUDE_DIR}" )
+    message("        Cholmod Library: ${CHOLMOD_LIBRARIES}" )
+else()
+    message("        Cholmod Not Found!!!")
+endif()
+
 find_package(G2O REQUIRED)
 include_directories(${G2O_INCLUDE_DIR})
+set(G2O_LIBS
+    g2o_cli g2o_core g2o_stuff g2o_types_slam2d g2o_types_slam3d g2o_types_sba
+    g2o_solver_dense g2o_solver_csparse g2o_csparse_extension
+)
 if(G2O_FOUND)
     message(STATUS "        G2O Root:    ${G2O_ROOT}")
     message(STATUS "        G2O Include: ${G2O_INCLUDE_DIR}")
     message(STATUS "        G2O Library: ${G2O_LIBS}")
-endif(G2O_FOUND)
+else()
+    message("        G2O Not Found!!!")
+endif()
 
 # sophus
 

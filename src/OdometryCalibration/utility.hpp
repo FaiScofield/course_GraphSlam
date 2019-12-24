@@ -42,7 +42,7 @@ bool plotTrajectory(const std::string& plotFile, const std::string& inputFile)
         std::cerr << "Error in openning the output file: " << plotFile << std::endl;
         return false;
     }
-
+    // set term
     ofs << "set term png size 900,900" << std::endl;
     ofs << "set output \"" << plotFile << ".png\"" << std::endl;
     ofs << "set size ratio -1" << std::endl;
@@ -57,9 +57,9 @@ bool plotTrajectory(const std::string& plotFile, const std::string& inputFile)
 
     ofs.close();
 
-    char command[1024];
-    sprintf(command, "gnuplot %s;", plotFile.c_str());
-    system(command);
+    std::string command = "gnuplot " + plotFile;
+    system(command.c_str());
+    return true;
 }
 
 #endif
