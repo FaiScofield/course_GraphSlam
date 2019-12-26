@@ -1,6 +1,5 @@
 
 #define USE_G2O 0
-#define TRANS_DIMENSION_6 1
 
 #include "utility.hpp"
 #include <iostream>
@@ -128,7 +127,7 @@ bool analyseData(const vector<Eigen::Vector3d>& vdOdom, vector<Eigen::Vector3d>&
     size_t N = vdOdom.size();
 
     vOdomData.clear();
-    vOdomData.resize(N + 1, Vector3d::Zero());
+    vOdomData.resize(N, Vector3d::Zero());
 
 #if USE_G2O
     vector<g2o::SE2> tmpPose(N + 1);
@@ -138,14 +137,13 @@ bool analyseData(const vector<Eigen::Vector3d>& vdOdom, vector<Eigen::Vector3d>&
         vOdomData[i + 1] = tmpPose[i + 1].toVector();
     }
 #else
-    vector<Matrix3d> tmpPose(N + 1);
-    tmpPose[0].setIdentity();
+    Matrix3d tmpPose = Matrix3d::Identity();
     for (size_t i = 0; i < N; ++i) {
-        tmpPose[i + 1] = tmpPose[i] * VectorToMatrix(vdOdom[i]);
-        vOdomData[i + 1] = MatrixToVector(tmpPose[i + 1]);
+        tmpPose *= VectorToMatrix(vdOdom[i]);
+        vOdomData[i] = MatrixToVector(tmpPose);
     }
 #endif
-    return vOdomData.size() == vdOdom.size() + 1;
+    return vOdomData.size() == vdOdom.size();
 }
 
 bool saveData(const string& outFile, const vector<Eigen::Vector3d>& vOdomEsitimate,
@@ -171,7 +169,7 @@ bool saveData(const string& outFile, const vector<Eigen::Vector3d>& vOdomEsitima
     return true;
 }
 
-Eigen::Matrix3d solveWithSVD(const vector<Eigen::Vector3d>& vOdomEsitimate, const vector<Eigen::Vector3d>& vGroundTruth)
+Eigen::Matrix3d solveWithDLT(const vector<Eigen::Vector3d>& vOdomEsitimate, const vector<Eigen::Vector3d>& vGroundTruth)
 {
     assert(vOdomEsitimate.size() == vGroundTruth.size());
     const size_t N = vOdomEsitimate.size();
@@ -197,15 +195,14 @@ Eigen::Matrix3d solveWithSVD(const vector<Eigen::Vector3d>& vOdomEsitimate, cons
             J.setZero();
             J.block<1, 3>(0, 0) = -vOdomEsitimate[i].transpose();
             J.block<1, 3>(1, 3) = -vOdomEsitimate[i].transpose();
-#if TRANS_DIMENSION_6
-#else
             J.block<1, 3>(2, 6) = -vOdomEsitimate[i].transpose();
-#endif
+
             H += J.transpose() * J;
-            b += -J.transpose() * e;
+            b += J.transpose() * e;
         }
 
-        Matrix<double, 9, 1> delta_x = H.ldlt().solve(b);
+        // Matrix<double, 9, 1> delta_x = H.ldlt().solve(-b);
+        Matrix<double, 9, 1> delta_x = -H.inverse() * b;
         if (isnan(delta_x[0])) {
             cerr << "result is nan!" << endl;
             break;
@@ -215,22 +212,9 @@ Eigen::Matrix3d solveWithSVD(const vector<Eigen::Vector3d>& vOdomEsitimate, cons
             break;
         }
 
-//        JacobiSVD<MatrixXd> svd(H, ComputeFullU | ComputeFullV);
-//        const MatrixXd& U = svd.matrixU();
-//        const MatrixXd& V = svd.matrixV();
-//        const MatrixXd& S = svd.singularValues();
-//        MatrixXd S_inv(V.cols(), U.cols());
-//        S_inv.setZero();
-//        for (int j = 0; j < S.size(); ++j) {
-//            if (S(j, 0) > 0)
-//                S_inv(j, j) = 1 / S(j, 0);
-//        }
-
-//        Matrix<double, 9, 9> H_inv = V * S_inv * U.transpose();
-//        Matrix<double, 9, 1> delta_x = -H_inv * b;
-        dA.block<1, 3>(0, 0) = delta_x.block<3, 1>(0, 0).transpose();
-        dA.block<1, 3>(1, 0) = delta_x.block<3, 1>(3, 0).transpose();
-        dA.block<1, 3>(2, 0) = delta_x.block<3, 1>(6, 0).transpose();
+        dA.block<1, 3>(0, 0) = delta_x.head(3).transpose();
+        dA.block<1, 3>(1, 0) = delta_x.segment(3, 3).transpose();
+        dA.block<1, 3>(2, 0) = delta_x.tail(3).transpose();
         A += dA;
 
         cout << " iter = " << iter << ", sum error = " << currCost << ", A = " << endl << A << endl;
@@ -248,65 +232,57 @@ Eigen::Matrix3d solveWithSVD_SE2(const vector<Eigen::Vector3d>& vOdomEsitimate, 
     const size_t N = vOdomEsitimate.size();
 
     // initial guess
-    Matrix3d A = Matrix3d::Identity();
-    Matrix3d dA = Matrix3d::Identity();
+    Vector3d A = Vector3d::Zero();
 
     // iteration
-    double lastSum = 9999999.;
+    double currCost = 0;
+    double lastCost = 9999999.;
     int iter = 0;
     for (; iter < 100; ++iter) {
+        const Matrix2d R = Rotation2Dd(A(2)).toRotationMatrix();
+
         Matrix3d H = Matrix3d::Zero();
         Vector3d b = Vector3d::Zero();
-        double sum = 0;
+        currCost = 0;
         for (size_t i = 0; i < N; ++i) {
-            const Matrix2d R = A.block<2, 2>(0, 0);
-            const double angle = atan2(R(1, 0), R(0, 0));
-            const Vector2d t1 = vGroundTruth[i].head<2>();
-            const Vector2d t2 = vOdomEsitimate[i].head<2>();
-            Vector2d dt = t1 - R * t2 - A.block<2, 1>(0, 2);
+            const Vector2d t1 = vGroundTruth[i].head(2);
+            const Vector2d t2 = vOdomEsitimate[i].head(2);
             Vector3d e;
-            e.head<2>() = dt;
-            e(2) = vGroundTruth[i](2) - vOdomEsitimate[i](2) - angle;
-            sum += e.norm();
+            e.head(2) = t1 - R * t2 - A.head(2);
+            e(2) = g2o::normalize_theta(vGroundTruth[i](2) - vOdomEsitimate[i](2) - A(2));
+            currCost += e.norm();
 
-            const double x1 = vOdomEsitimate[i](0);
-            const double y1 = vOdomEsitimate[i](1);
             Matrix3d J = Matrix3d::Zero();
-            J.block<2, 2>(0, 0) = -Matrix2d::Identity();
-            J(0, 2) = sin(angle) * x1 + cos(angle) * y1;
-            J(1, 2) = sin(angle) * y1 - cos(angle) * x1;
+            J.block(0, 0, 2, 2) = -Matrix2d::Identity();
+            J(0, 2) = sin(A(2)) * t2(0) + cos(A(2)) * t2(1);
+            J(1, 2) = sin(A(2)) * t2(1) - cos(A(2)) * t2(0);
             J(2, 2) = -1;
 
             H += J.transpose() * J;
             b += J.transpose() * e;
         }
 
-        JacobiSVD<MatrixXd> svd(H, ComputeFullU | ComputeFullV);
-        const MatrixXd& U = svd.matrixU();
-        const MatrixXd& V = svd.matrixV();
-        const MatrixXd& S = svd.singularValues();
-        MatrixXd S_inv(V.cols(), U.cols());
-        S_inv.setZero();
-        for (int j = 0; j < S.size(); ++j) {
-            if (S(j, 0) > 0)
-                S_inv(j, j) = 1 / S(j, 0);
+        Vector3d dA = H.ldlt().solve(-b);
+        if (isnan(dA[0])) {
+            cerr << "result is nan!" << endl;
+            break;
+        }
+        if (iter > 0 && currCost > lastCost) {
+            cerr << "result increase!" << endl;
+            break;
         }
 
-        Matrix3d H_inv = V * S_inv * U.transpose();
-        Vector3d delta_x = -H_inv * b;
+        A.head(2) += R * dA.head(2);
+        A(2) += dA(2);
+        A(2) = g2o::normalize_theta(A(2));
 
-        Rotation2Dd dR(delta_x(2));
-        dA.block<2, 2>(0, 0) = dR.toRotationMatrix();
-        dA.block<2, 1>(0, 2) = delta_x.block<2, 1>(0, 0);
-        A = dA * A;
-
-        cout << " iter = " << iter << ", sum error = " << sum << ", A = " << endl << A << endl;
-        if (lastSum - sum < 1e-6 && iter > 0)
+        cout << " iter = " << iter << ", sum error = " << currCost << ", A = " << A.transpose() << endl;
+        if (iter > 0 && lastCost - currCost < 1e-6)
             break;
-        lastSum = sum;
+        lastCost = currCost;
     }
 
-    return A;
+    return VectorToMatrix(A);
 }
 
 Eigen::Matrix3d solveWithICP(const vector<Eigen::Vector3d>& vOdomEsitimate, const vector<Eigen::Vector3d>& vGroundTruth)
@@ -401,17 +377,17 @@ int main(int argc, char** argv)
     }
 
     vector<Vector3d> vOdomEsitimate, vGroundTruth;
-    bool b1 = analyseData(vdOdom1, vOdomEsitimate);
-    bool b2 = analyseData(vdOdom2, vGroundTruth);
+    bool b1 = analyseData(vdOdom2, vOdomEsitimate);
+    bool b2 = analyseData(vdOdom1, vGroundTruth);
     if (b1 && b2)
         saveData("calib_before.txt", vOdomEsitimate, vGroundTruth);
 
 #if USE_G2O
     Matrix3d A = solveWithG2O(vOdomEsitimate, vGroundTruth);
 #else
-//    Matrix3d A = solveWithSVD(vOdomEsitimate, vGroundTruth);
-//    Matrix3d A = solveWithSVD_SE2(vOdomEsitimate, vGroundTruth);
-    Matrix3d A = solveWithICP(vOdomEsitimate, vGroundTruth);
+//    Matrix3d A = solveWithDLT(vOdomEsitimate, vGroundTruth);
+    Matrix3d A = solveWithSVD_SE2(vOdomEsitimate, vGroundTruth);
+//    Matrix3d A = solveWithICP(vOdomEsitimate, vGroundTruth);
 #endif
 
     cout << "A = " << endl << A << endl;
